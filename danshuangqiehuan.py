@@ -72,10 +72,10 @@ class MainWin(QMainWindow):
         self.timer.start(33)
         self.is_rec = False
         self.writer = None
-        self.showFullScreen()
+        # self.showFullScreen()
         #放在__init__末尾
         self.switch_flag_file = "/tmp/cam_switch.flag"
-    
+        signal.signal(signal.SIGUSR1,self.sig_switch_mode)
       
     def sig_switch_mode(self,*args):
         #和界面按钮共用同一个切换函数
@@ -174,51 +174,6 @@ class MainWin(QMainWindow):
         rec_str = "正在录像" if self.is_rec else "空闲"
         cam_info = "双摄" if self.use_dual_cam else "单摄(后置黑屏)"
         self.stat.showMessage(f"摄像头正常|{cam_info}|{rec_str} {mod_str} | 存储:{self.save_root}")
-    # def update_frame(self):
-    #     # 新增：检测切换标记
-    #     if os.path.exists(self.switch_flag_file):
-    #         os.remove(self.switch_flag_file)
-    #         self.switch_car_mode()
-    #     arr0 = self.cam0.capture_array() #前
-    #     # 单摄无cam1时生成黑图，不报错
-    #     if self.use_dual_cam and self.cam1 is not None:
-    #         arr1 = self.cam1.capture_array() #后
-    #     else:
-    #         # 和前摄同尺寸黑色画布
-    #         arr1 = np.zeros_like(arr0)
-
-    #     H,W,C = arr0.shape
-    #     # 小窗尺寸：主画面宽高1/4
-    #     small_w = W//3
-    #     small_h = H//3
-
-    #     if self.car_run_mode == 0:
-    #         # 前进：前视全屏，后视缩小放右上角
-    #         main_img = arr0.copy()
-    #         small_img = cv2.resize(arr1,(small_w,small_h))
-    #     else:
-    #         # 后退：后视全屏，前视缩小放右上角
-    #         main_img = arr1.copy()
-    #         small_img = cv2.resize(arr0,(small_w,small_h))
-    #     # 贴在右上角
-    #     main_img[0:small_h, W-small_w:W, :] = small_img
-
-    #     # ======如果正在录像，写入当前合成帧======
-    #     if self.is_rec and self.writer is not None:
-    #         # opencv保存需要BGR格式，RGB转BGR
-    #         frame_bgr = cv2.cvtColor(main_img,cv2.COLOR_RGB2BGR)
-    #         self.writer.write(frame_bgr)
-
-    #     # Qt渲染
-    #     h,w,ch = main_img.shape
-    #     qimg = QImage(main_img.data,w,h,ch*w,QImage.Format.Format_RGB888)
-    #     pix = QPixmap.fromImage(qimg).scaled(self.preview_lab.size(),Qt.AspectRatioMode.KeepAspectRatio)
-    #     self.preview_lab.setPixmap(pix)
-
-    #     mod_str = "【前进：前主+后画中画】" if self.car_run_mode==0 else "【后退：后主+前画中画】"
-    #     rec_str = "正在录像" if self.is_rec else "空闲"
-    #     cam_info = "双摄" if self.use_dual_cam else "单摄(后置黑屏)"
-    #     self.stat.showMessage(f"摄像头正常|{cam_info}|{rec_str} {mod_str} | 存储:{self.save_root}")
 
     def rec_toggle(self):
         self.is_rec = not self.is_rec
