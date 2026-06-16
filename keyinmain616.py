@@ -58,6 +58,7 @@ class MainWin(QMainWindow):
 
         # ========== 摄像头配置 ==========
         self.use_dual_cam = True
+        # self.use_dual_cam = False
         self.car_run_mode = 0  # 0前进 1后退
         self.cam0 = None
         self.cam1 = None
@@ -70,7 +71,7 @@ class MainWin(QMainWindow):
         # ========== GPIO按键配置 ==========
         # 引脚定义
         self.KEY_MODE = 19    # 画面切换键
-        self.KEY_SNAP = 20    # 拍照键（可自行修改）
+        self.KEY_SNAP = 13    # 拍照键（可自行修改）
         self.init_gpio()
         # 按键防抖标记，防止长按重复触发
         self.key_mode_flag = False
@@ -84,6 +85,7 @@ class MainWin(QMainWindow):
         self.is_rec = False
         self.writer = None
 
+        self.showFullScreen()
         # 移除原文件标记、信号监听，不再依赖外部脚本
         # self.switch_flag_file = "/tmp/cam_switch.flag"
         # signal.signal(signal.SIGUSR1,self.sig_switch_mode)
