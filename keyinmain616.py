@@ -192,9 +192,10 @@ class MainWin(QMainWindow):
             self.writer.write(frame_bgr)
 
         # Qt渲染
-        main_img_rgb = cv2.cvtColor(main_img, cv2.COLOR_BGR2RGB)
+        # main_img_rgb = cv2.cvtColor(main_img, cv2.COLOR_BGR2RGB)
         h,w,ch = main_img_rgb.shape
-        qimg = QImage(main_img_rgb.data, w, h, ch * w, QImage.Format.Format_RGB888)
+        # qimg = QImage(main_img_rgb.data, w, h, ch * w, QImage.Format.Format_RGB888)
+        qimg = QImage(main_img.data, w, h, ch * w, QImage.Format.Format_RGB888)
         pix = QPixmap.fromImage(qimg).scaled(self.preview_lab.size(),Qt.AspectRatioMode.KeepAspectRatio)
         self.preview_lab.setPixmap(pix)
 
