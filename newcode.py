@@ -1,0 +1,434 @@
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QLabel, QHBoxLayout, QWidget, QToolBar, QFileDialog,
+                               QMenu, QDialog, QVBoxLayout, QSpinBox, QCheckBox, QPushButton, QLabel as QLab)
+from PyQt6.QtGui import QAction, QFont, QColor
+from PyQt6.QtCore import QTimer, Qt, QThread, pyqtSignal
+from PyQt6.QtGui import QImage, QPixmap
+from picamera2 import Picamera2, controls
+from libcamera import Transform
+import sys, os, subprocess, json, logging, time
+import numpy as np
+import cv2
+from datetime import datetime
+import signal
+import RPi.GPIO as GPIO
+
+# ====================== 全局配置常量 ======================
+CONFIG_PATH = "/opt/mineral_recorder/config.json"
+LOG_PATH = "/opt/mineral_recorder/log/record.log"
+# GPIO引脚定义
+KEY_SNAP = 13       # 拍照短按，长按锁定视频
+KEY_MODE = 19       # 画面模式切换
+BUZZER_PIN = 6      # 蜂鸣器
+SHAKE_PIN = 26      # 震动传感器
+# 蜂鸣器时长
+BEEP_SHORT = 0.1
+BEEP_LONG = 0.3
+# 默认配置
+DEFAULT_CFG = {
+    "device_id": "MA-001",
+    "video_width": 1280,
+    "video_height": 720,
+    "split_minute": 5,
+    "enable_watermark": True,
+    "enable_audio": True,
+    "cycle_storage_gb": 30,
+    "warn_space_gb": 5,
+    "cam_flip": True
+}
+# 初始化日志
+os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
+logging.basicConfig(filename=LOG_PATH, level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger("mineral_rec")
+
+# ====================== GPIO中断回调 ======================
+class GpioHandler:
+    def __init__(self, win):
+        self.win = win
+        self.long_press_timer = {}
+        GPIO.setmode(GPIO.BCM)
+        # 按键上拉输入
+        GPIO.setup(KEY_SNAP, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+        GPIO.setup(KEY_MODE, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+        GPIO.setup(SHAKE_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+        GPIO.setup(BUZZER_PIN, GPIO.OUT, initial=GPIO.LOW)
+        # 注册下降沿中断
+        GPIO.add_event_detect(KEY_SNAP, GPIO.FALLING, callback=self.key_snap_cb, bouncetime=200)
+        GPIO.add_event_detect(KEY_MODE, GPIO.FALLING, callback=self.key_mode_cb, bouncetime=200)
+        GPIO.add_event_detect(SHAKE_PIN, GPIO.FALLING, callback=self.shake_cb, bouncetime=300)
+
+    def beep(self, sec):
+        GPIO.output(BUZZER_PIN, GPIO.HIGH)
+        time.sleep(sec)
+        GPIO.output(BUZZER_PIN, GPIO.LOW)
+
+    def key_snap_cb(self, ch):
+        # 长按2s判定紧急锁定
+        t_start = time.time()
+        while GPIO.input(ch) == 0:
+            if time.time() - t_start > 2:
+                self.win.lock_current_video()
+                self.beep(BEEP_LONG)
+                logger.info("长按拍照键：锁定当前视频")
+                return
+        self.win.save_pic()
+        self.beep(BEEP_SHORT)
+        logger.info("短按拍照键：截图保存")
+
+    def key_mode_cb(self, ch):
+        self.win.switch_car_mode()
+        self.beep(BEEP_SHORT)
+        logger.info("模式切换按键触发")
+
+    def shake_cb(self, ch):
+        self.win.lock_current_video()
+        self.beep(BEEP_LONG)
+        logger.warning("震动传感器触发，锁定当前录像片段")
+
+    def clean(self):
+        GPIO.output(BUZZER_PIN, GPIO.LOW)
+        GPIO.cleanup()
+
+# ====================== 设置弹窗 ======================
+class SettingDialog(QDialog):
+    def __init__(self, cfg, parent):
+        super().__init__(parent)
+        self.cfg = cfg
+        self.setWindowTitle("记录仪参数设置")
+        self.resize(400, 300)
+        layout = QVBoxLayout()
+        # 分段时长
+        layout.addWidget(QLab("录像分段时长(分钟)"))
+        self.split_sp = QSpinBox()
+        self.split_sp.setRange(1, 30)
+        self.split_sp.setValue(cfg["split_minute"])
+        layout.addWidget(self.split_sp)
+        # 水印开关
+        self.water_cb = QCheckBox("开启画面时间设备水印")
+        self.water_cb.setChecked(cfg["enable_watermark"])
+        layout.addWidget(self.water_cb)
+        # 音频开关
+        self.audio_cb = QCheckBox("开启录音")
+        self.audio_cb.setChecked(cfg["enable_audio"])
+        layout.addWidget(self.audio_cb)
+        # 保存按钮
+        save_btn = QPushButton("保存设置")
+        save_btn.clicked.connect(self.save_cfg)
+        layout.addWidget(save_btn)
+        self.setLayout(layout)
+
+    def save_cfg(self):
+        self.cfg["split_minute"] = self.split_sp.value()
+        self.cfg["enable_watermark"] = self.water_cb.isChecked()
+        self.cfg["enable_audio"] = self.audio_cb.isChecked()
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(self.cfg, f, ensure_ascii=False, indent=2)
+        self.accept()
+
+# ====================== 主窗口程序 ======================
+class MainWin(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        # 加载配置文件
+        self.load_config()
+        self.setWindowTitle("矿用本安行车记录仪 V2.0完善版")
+        self.resize(self.cfg["video_width"], self.cfg["video_height"])
+        # 界面基础
+        self.center_widget = QWidget()
+        self.setCentralWidget(self.center_widget)
+        lay = QHBoxLayout(self.center_widget)
+        self.preview_lab = QLabel("等待摄像头启动...")
+        self.preview_lab.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(self.preview_lab)
+        # 菜单栏 洋红底色
+        bar = self.menuBar()
+        bar.setStyleSheet("QMenuBar {background-color: magenta;color:#fff;}QMenuBar::item {background-color: magenta;}")
+        menu_file = bar.addMenu("文件")
+        menu_set = bar.addMenu("设置")
+        menu_album = bar.addMenu("相册/录像")
+        # 文件菜单
+        act_save = QAction("手动截图", self)
+        act_save.triggered.connect(self.save_pic)
+        menu_file.addAction(act_save)
+        # 设置菜单
+        act_setting = QAction("参数配置", self)
+        act_setting.triggered.connect(self.open_setting)
+        menu_set.addAction(act_setting)
+        # 相册菜单
+        act_open_album = QAction("打开存储目录", self)
+        act_open_album.triggered.connect(self.open_album)
+        menu_album.addAction(act_open_album)
+        # 工具栏
+        toolbar = QToolBar("快捷操作")
+        self.addToolBar(toolbar)
+        self.act_rec = QAction("开始录像", self)
+        self.act_rec.triggered.connect(self.rec_toggle)
+        toolbar.addAction(self.act_rec)
+        self.act_mode = QAction("模式：前进(前主+后画中画)", self)
+        self.act_mode.triggered.connect(self.switch_car_mode)
+        toolbar.addAction(self.act_mode)
+        # 状态栏
+        self.stat = self.statusBar()
+        self.stat.setStyleSheet("QStatusBar{font-size:12px;font-weight:bold;}")
+        # 摄像头变量
+        self.use_dual_cam = True
+        self.car_run_mode = 0  # 0前进 1后退
+        self.cam0 = None
+        self.cam1 = None
+        self.init_camera()
+        # 存储路径
+        self.save_root = self.get_usb_dir()
+        self.lock_root = os.path.join(self.save_root, "lock_video")
+        os.makedirs(self.save_root, exist_ok=True)
+        os.makedirs(self.lock_root, exist_ok=True)
+        # GPIO管理
+        self.gpio = GpioHandler(self)
+        # 录像相关
+        self.is_rec = False
+        self.writer = None
+        self.rec_start_time = None
+        self.split_sec = self.cfg["split_minute"] * 60
+        self.current_video_path = ""
+        # 画面定时器 33ms
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.update_frame)
+        self.timer.start(33)
+        # 磁盘空间检测定时器 30s一次
+        self.disk_timer = QTimer()
+        self.disk_timer.timeout.connect(self.check_disk_space)
+        self.disk_timer.start(30000)
+        # 全屏隐藏鼠标
+        self.showFullScreen()
+        app.setOverrideCursor(Qt.CursorShape.BlankCursor)
+
+    def load_config(self):
+        if os.path.exists(CONFIG_PATH):
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                self.cfg = json.load(f)
+        else:
+            self.cfg = DEFAULT_CFG
+            os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
+            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+                json.dump(self.cfg, f, indent=2)
+
+    def open_setting(self):
+        dlg = SettingDialog(self.cfg, self)
+        if dlg.exec():
+            self.load_config()
+            self.split_sec = self.cfg["split_minute"] * 60
+            logger.info("参数配置已更新")
+
+    def get_usb_dir(self):
+        try:
+            cmd = "lsblk -o MOUNTPOINT,FSTYPE | grep /media/"
+            out = subprocess.check_output(cmd, shell=True, encoding="utf-8")
+            lines = out.strip().splitlines()
+            for line in lines:
+                mp, fs = line.split()
+                if fs in ("vfat", "exfat", "ntfs", "fat32"):
+                    return os.path.join(mp, "record")
+            # 无U盘本地存储
+            logger.warning("未检测到U盘，切换本地存储")
+            return os.path.join(os.path.expanduser("~"), "record_backup")
+        except Exception as e:
+            logger.error(f"U盘检测异常:{str(e)}")
+            return os.path.join(os.path.expanduser("~"), "record_backup")
+
+    def check_disk_space(self):
+        statvfs = os.statvfs(self.save_root)
+        free_gb = (statvfs.f_frsize * statvfs.f_bavail) / (1024**3)
+        warn_gb = self.cfg["warn_space_gb"]
+        if free_gb < warn_gb:
+            self.stat.setStyleSheet("QStatusBar{color:rgb(255,160,0);font-weight:bold}")
+            self.stat.showMessage(f"【告警】剩余空间不足{warn_gb}GB！请清理录像 | 剩余{free_gb:.1f}GB")
+            self.gpio.beep(BEEP_LONG)
+        else:
+            self.stat.setStyleSheet("QStatusBar{color:rgb(0,180,0);font-weight:bold}")
+        # 循环清理旧视频
+        self.clean_old_video(free_gb)
+
+    def clean_old_video(self, free_gb):
+        cycle_gb = self.cfg["cycle_storage_gb"]
+        if free_gb > cycle_gb:
+            return
+        # 只清理普通录像，不碰锁定视频
+        files = []
+        for f in os.listdir(self.save_root):
+            if f.endswith(".mp4") and not os.path.join(self.save_root, f).startswith(self.lock_root):
+                full_p = os.path.join(self.save_root, f)
+                files.append((os.path.getctime(full_p), full_p))
+        files.sort()
+        # 依次删除最早视频直到空间达标
+        for ctime, path in files:
+            if free_gb > cycle_gb:
+                break
+            try:
+                os.remove(path)
+                logger.info(f"循环清理旧录像:{os.path.basename(path)}")
+                statvfs = os.statvfs(self.save_root)
+                free_gb = (statvfs.f_frsize * statvfs.f_bavail) / (1024**3)
+            except Exception as e:
+                logger.error(f"删除录像失败:{str(e)}")
+
+    def init_camera(self):
+        try:
+            w, h = self.cfg["video_width"], self.cfg["video_height"]
+            transform = Transform(vflip=True) if self.cfg["cam_flip"] else Transform()
+            self.cam0 = Picamera2(0)
+            cfg0 = self.cam0.create_video_configuration(main={"size": (w, h), "format": "RGB888"}, transform=transform)
+            self.cam0.configure(cfg0)
+            self.cam0.start()
+            if self.use_dual_cam:
+                self.cam1 = Picamera2(1)
+                cfg1 = self.cam1.create_video_configuration(main={"size": (w, h), "format": "RGB888"}, transform=transform)
+                self.cam1.configure(cfg1)
+                self.cam1.start()
+            logger.info("双摄像头初始化成功")
+        except Exception as e:
+            logger.error(f"摄像头初始化失败:{str(e)}")
+            self.preview_lab.setText(f"摄像头异常:{str(e)}，3s后重试")
+            QTimer.singleShot(3000, self.init_camera)
+
+    def switch_car_mode(self):
+        self.car_run_mode = 1 - self.car_run_mode
+        if self.car_run_mode == 0:
+            self.act_mode.setText("模式：前进(前主+后画中画)")
+        else:
+            self.act_mode.setText("模式：后退(后主+前画中画)")
+
+    def add_watermark(self, frame):
+        if not self.cfg["enable_watermark"]:
+            return frame
+        dt_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        dev_id = self.cfg["device_id"]
+        mode_str = "前进" if self.car_run_mode == 0 else "后退"
+        text = f"{dt_str} 设备:{dev_id} {mode_str}"
+        cv2.putText(frame, text, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+        return frame
+
+    def update_frame(self):
+        try:
+            arr0 = self.cam0.capture_array()
+            if self.use_dual_cam and self.cam1 is not None:
+                arr1 = self.cam1.capture_array()
+            else:
+                arr1 = np.zeros_like(arr0)
+            H, W, C = arr0.shape
+            small_w = W // 3
+            small_h = H // 3
+            # 合成画中画+白色边框区分
+            if self.car_run_mode == 0:
+                main_img = arr0.copy()
+                small_img = cv2.resize(arr1, (small_w, small_h))
+            else:
+                main_img = arr1.copy()
+                small_img = cv2.resize(arr0, (small_w, small_h))
+            # 画中画白色边框
+            cv2.rectangle(small_img, (0, 0), (small_w-1, small_h-1), (255,255,255), 3)
+            main_img[0:small_h, W-small_w:W, :] = small_img
+            # 水印
+            main_img = self.add_watermark(main_img)
+            # 分段录像判断
+            if self.is_rec and self.writer is not None:
+                frame_bgr = cv2.cvtColor(main_img, cv2.COLOR_RGB2BGR)
+                self.writer.write(frame_bgr)
+                if time.time() - self.rec_start_time > self.split_sec:
+                    self.split_new_video()
+            # Qt渲染
+            h, w, ch = main_img.shape
+            qimg = QImage(main_img.data, w, h, ch * w, QImage.Format.Format_RGB888)
+            pix = QPixmap.fromImage(qimg).scaled(self.preview_lab.size(), Qt.AspectRatioMode.KeepAspectRatio)
+            self.preview_lab.setPixmap(pix)
+            # 状态栏文字
+            mod_str = "【前进：前主+后画中画】" if self.car_run_mode == 0 else "【后退：后主+前画中画】"
+            rec_str = "正在录像" if self.is_rec else "空闲"
+            cam_info = "双摄正常" if self.use_dual_cam else "单摄(后视黑屏)"
+            self.stat.showMessage(f"{cam_info}|{rec_str} {mod_str} | 存储:{self.save_root}")
+        except Exception as e:
+            logger.error(f"画面刷新异常:{str(e)}")
+            self.preview_lab.setText(f"画面读取异常，等待重连...")
+
+    def split_new_video(self):
+        if self.writer:
+            self.writer.release()
+            self.writer = None
+        logger.info("达到分段时长，新建录像文件")
+        self.create_rec_writer()
+
+    def create_rec_writer(self):
+        dt = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.current_video_path = os.path.join(self.save_root, f"{dt}.mp4")
+        w, h = self.cfg["video_width"], self.cfg["video_height"]
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        self.writer = cv2.VideoWriter(self.current_video_path, fourcc, 30, (w, h))
+        self.rec_start_time = time.time()
+
+    def rec_toggle(self):
+        self.is_rec = not self.is_rec
+        if self.is_rec:
+            self.create_rec_writer()
+            self.act_rec.setText("停止录像")
+            self.stat.setStyleSheet("QStatusBar{color:rgb(255,0,0);font-weight:bold}")
+            logger.info(f"开始录像，文件:{self.current_video_path}")
+            self.gpio.beep(BEEP_SHORT)
+        else:
+            if self.writer is not None:
+                self.writer.release()
+                self.writer = None
+            self.act_rec.setText("开始录像")
+            self.stat.setStyleSheet("QStatusBar{color:rgb(0,180,0);font-weight:bold}")
+            logger.info("停止录像")
+            self.gpio.beep(BEEP_LONG)
+
+    def lock_current_video(self):
+        if not self.is_rec or not self.current_video_path:
+            return
+        try:
+            name = os.path.basename(self.current_video_path)
+            dst = os.path.join(self.lock_root, f"LOCK_{name}")
+            subprocess.run(["cp", self.current_video_path, dst])
+            logger.info(f"视频锁定完成:{name}")
+        except Exception as e:
+            logger.error(f"锁定视频失败:{str(e)}")
+
+    def save_pic(self):
+        # 保存原始高清帧，不压缩预览图
+        dt = datetime.now().strftime("%Y%m%d_%H%M%S")
+        default_jpg = os.path.join(self.save_root, f"shot_{dt}.jpg")
+        save_path, _ = QFileDialog.getSaveFileName(self, "保存高清截图", default_jpg, "*.jpg")
+        if save_path:
+            # 读取当前最新帧保存
+            arr0 = self.cam0.capture_array()
+            cv2.imwrite(save_path, cv2.cvtColor(arr0, cv2.COLOR_RGB2BGR))
+            logger.info(f"截图保存:{save_path}")
+
+    def open_album(self):
+        os.system(f"xdg-open {self.save_root} &")
+
+    def closeEvent(self, event):
+        # 释放摄像头
+        if self.cam0:
+            self.cam0.stop()
+        if self.cam1:
+            self.cam1.stop()
+        # 关闭录像
+        if self.writer:
+            self.writer.release()
+        # 清理GPIO
+        self.gpio.clean()
+        logger.info("程序正常退出，资源全部释放")
+        event.accept()
+
+    # ESC退出全屏
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape:
+            self.showNormal()
+            app.restoreOverrideCursor()
+
+if __name__ == "__main__":
+    try:
+        app = QApplication(sys.argv)
+        app.setStyleSheet("QMenuBar{background:magenta;color:white;}QMenuBar::item{background:magenta;}")
+        win = MainWin()
+        sys.exit(app.exec())
+    except Exception as e:
+        logger.critical(f"程序全局崩溃:{str(e)}")
