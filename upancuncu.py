@@ -1,3 +1,4 @@
+# 通过更改config.json中的cycle_storage_gb参数，可以快速测试循环存储功能，设置为1GB会频繁触发循环删除旧视频的逻辑，便于验证功能正确性和稳定性。
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QLabel, QHBoxLayout, QWidget, QToolBar, QFileDialog,
                                QMenu, QDialog, QVBoxLayout, QSpinBox, QCheckBox, QPushButton, QLabel as QLab)
 from PyQt6.QtGui import QAction, QFont, QColor
@@ -13,8 +14,6 @@ import signal
 import RPi.GPIO as GPIO
 
 # ====================== 全局配置常量 ======================
-# CONFIG_PATH = "/opt/mineral_recorder/config.json"
-#LOG_PATH = "/opt/mineral_recorder/log/record.log"
 CONFIG_PATH = "/home/kongbin/test/config.json"
 LOG_PATH = "/home/kongbin/test/log/record.log"
 # GPIO引脚定义
@@ -30,14 +29,14 @@ DEFAULT_CFG = {
     "device_id": "MA-001",
     "video_width": 1280,
     "video_height": 720,
-    "split_minute": 5,
+    "split_minute": 1,
     "enable_watermark": True,
     "enable_audio": True,
     "cycle_storage_gb": 30,
     "warn_space_gb": 5,
     "cam_flip": True
 }
-# 初始化日志
+# 自动创建日志目录，解决权限报错
 os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
 logging.basicConfig(filename=LOG_PATH, level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("mineral_rec")
@@ -190,6 +189,8 @@ class MainWin(QMainWindow):
         self.rec_start_time = None
         self.split_sec = self.cfg["split_minute"] * 60
         self.current_video_path = ""
+        # 画面缓存（用于截图，保证截图和预览画面完全一致）
+        self.current_frame_rgb = None
         # 画面定时器 33ms
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_frame)
@@ -221,21 +222,53 @@ class MainWin(QMainWindow):
 
     def get_usb_dir(self):
         try:
-            cmd = "lsblk -o MOUNTPOINT,FSTYPE | grep /media/"
-            out = subprocess.check_output(cmd, shell=True, encoding="utf-8")
-            lines = out.strip().splitlines()
+            # 改用subprocess.run，grep无结果不会抛异常
+            cmd = ["lsblk", "-o", "MOUNTPOINT,FSTYPE", "--noheadings"]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
+            lines = result.stdout.strip().splitlines()
+            usb_mount = None
             for line in lines:
-                mp, fs = line.split()
-                if fs in ("vfat", "exfat", "ntfs", "fat32"):
-                    return os.path.join(mp, "record")
-            # 无U盘本地存储
-            logger.warning("未检测到U盘，切换本地存储")
-            return os.path.join(os.path.expanduser("~"), "record_backup")
+                parts = line.split()
+                if len(parts) < 2:
+                    continue
+                mp, fs = parts[0], parts[1]
+                # 筛选移动存储格式
+                if fs in ("vfat", "exfat", "ntfs", "fat32") and mp.startswith("/media/"):
+                    # 写入权限测试，无法写入直接跳过该U盘
+                    test_file = os.path.join(mp, ".write_test.tmp")
+                    try:
+                        with open(test_file, "w") as f:
+                            f.write("test")
+                        os.remove(test_file)
+                        usb_mount = mp
+                        break
+                    except Exception as e:
+                        logger.warning(f"U盘挂载点 {mp} 无写入权限，跳过：{str(e)}")
+            if usb_mount:
+                save_path = os.path.join(usb_mount, "record")
+                lock_path = os.path.join(save_path, "lock_video")
+                os.makedirs(save_path, exist_ok=True)
+                os.makedirs(lock_path, exist_ok=True)
+                logger.info(f"【存储确认】识别可写U盘，实际存储目录：{save_path}")
+                return save_path
+            else:
+                raise Exception("未找到拥有写入权限的U盘")
         except Exception as e:
-            logger.error(f"U盘检测异常:{str(e)}")
-            return os.path.join(os.path.expanduser("~"), "record_backup")
+            local_path = os.path.join(os.path.expanduser("~"), "record_backup")
+            os.makedirs(local_path, exist_ok=True)
+            logger.warning(f"【存储切换】U盘不可用({str(e)})，切换本地存储：{local_path}")
+            return local_path
 
     def check_disk_space(self):
+        # 每次磁盘检测自动重新识别U盘，支持中途插拔
+        new_root = self.get_usb_dir()
+        if new_root != self.save_root:
+            self.save_root = new_root
+            self.lock_root = os.path.join(self.save_root, "lock_video")
+            os.makedirs(self.save_root, exist_ok=True)
+            os.makedirs(self.lock_root, exist_ok=True)
+            logger.info(f"【存储目录更新】已切换至：{self.save_root}")
+
         statvfs = os.statvfs(self.save_root)
         free_gb = (statvfs.f_frsize * statvfs.f_bavail) / (1024**3)
         warn_gb = self.cfg["warn_space_gb"]
@@ -248,28 +281,56 @@ class MainWin(QMainWindow):
         # 循环清理旧视频
         self.clean_old_video(free_gb)
 
+    # def clean_old_video(self, free_gb):
+    #     cycle_gb = self.cfg["cycle_storage_gb"]
+    #     if free_gb > cycle_gb:
+    #         return
+    #     # 只清理普通录像，不碰锁定视频
+    #     files = []
+    #     for f in os.listdir(self.save_root):
+    #         if f.endswith(".mp4") and not os.path.join(self.save_root, f).startswith(self.lock_root):
+    #             full_p = os.path.join(self.save_root, f)
+    #             files.append((os.path.getctime(full_p), full_p))
+    #     files.sort()
+    #     # 依次删除最早视频直到空间达标
+    #     for ctime, path in files:
+    #         if free_gb > cycle_gb:
+    #             break
+    #         try:
+    #             os.remove(path)
+    #             logger.info(f"循环清理旧录像:{os.path.basename(path)}")
+    #             statvfs = os.statvfs(self.save_root)
+    #             free_gb = (statvfs.f_frsize * statvfs.f_bavail) / (1024**3)
+    #         except Exception as e:
+    #             logger.error(f"删除录像失败:{str(e)}")
     def clean_old_video(self, free_gb):
-        cycle_gb = self.cfg["cycle_storage_gb"]
-        if free_gb > cycle_gb:
-            return
-        # 只清理普通录像，不碰锁定视频
-        files = []
-        for f in os.listdir(self.save_root):
-            if f.endswith(".mp4") and not os.path.join(self.save_root, f).startswith(self.lock_root):
-                full_p = os.path.join(self.save_root, f)
-                files.append((os.path.getctime(full_p), full_p))
-        files.sort()
-        # 依次删除最早视频直到空间达标
-        for ctime, path in files:
-            if free_gb > cycle_gb:
-                break
-            try:
-                os.remove(path)
-                logger.info(f"循环清理旧录像:{os.path.basename(path)}")
-                statvfs = os.statvfs(self.save_root)
-                free_gb = (statvfs.f_frsize * statvfs.f_bavail) / (1024**3)
-            except Exception as e:
-                logger.error(f"删除录像失败:{str(e)}")
+        save_root = self.save_root
+        all_video = []       # 全部录像（含当前录制）
+        del_candidate = []    # 可删除的旧录像（排除当前录制）
+
+        for fname in os.listdir(save_root):
+            if fname.endswith(".mp4"):
+                fpath = os.path.join(save_root, fname)
+                fsize = os.path.getsize(fpath)
+                ctime = os.path.getctime(fpath)
+                all_video.append((ctime, fpath, fsize))
+                # 当前正在写入的视频不加入删除列表
+                if fpath != self.current_video_path:
+                    del_candidate.append((ctime, fpath, fsize))
+
+        # 计算所有视频总占用（包含正在录制的片段）
+        total_all_gb = sum(item[2] for item in all_video) / (1024 ** 3)
+        limit_gb = self.cfg["cycle_storage_gb"]
+        # 按创建时间升序，最旧文件排在前面
+        del_candidate.sort()
+
+        logger.info(f"【容量校验】全部录像总大小:{total_all_gb:.2f}GB，上限阈值:{limit_gb}GB")
+        # 总容量超过4GB，循环删除最早视频
+        while total_all_gb > limit_gb and len(del_candidate) > 0:
+            del_time, del_path, del_size = del_candidate.pop(0)
+            os.remove(del_path)
+            logger.info(f"【自动清理】删除旧录像:{os.path.basename(del_path)}，释放{del_size/(1024**3):.2f}GB")
+            total_all_gb -= del_size / (1024 ** 3)
 
     def init_camera(self):
         try:
@@ -297,15 +358,21 @@ class MainWin(QMainWindow):
         else:
             self.act_mode.setText("模式：后退(后主+前画中画)")
 
-    def add_watermark(self, frame):
+    # ========== 修复水印色彩失真核心函数 ==========
+    def add_watermark(self, frame_rgb):
         if not self.cfg["enable_watermark"]:
-            return frame
+            return frame_rgb
         dt_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         dev_id = self.cfg["device_id"]
         mode_str = "前进" if self.car_run_mode == 0 else "后退"
-        text = f"{dt_str} 设备:{dev_id} {mode_str}"
-        cv2.putText(frame, text, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-        return frame
+        # text = f"{dt_str} 设备:{dev_id} {mode_str}"
+        text = f"{dt_str}"
+        # RGB转BGR后绘图，避免通道颠倒失真
+        frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+        cv2.putText(frame_bgr, text, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+        # 绘图完成转回原生RGB还给画面流程
+        frame_fixed = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        return frame_fixed
 
     def update_frame(self):
         try:
@@ -324,18 +391,20 @@ class MainWin(QMainWindow):
             else:
                 main_img = arr1.copy()
                 small_img = cv2.resize(arr0, (small_w, small_h))
-            # 画中画白色边框
+            # 画中画白色边框（缩放图像不影响主画面通道）
             cv2.rectangle(small_img, (0, 0), (small_w-1, small_h-1), (255,255,255), 3)
             main_img[0:small_h, W-small_w:W, :] = small_img
-            # 水印
+            # 水印处理（已修复通道转换，无色彩失真）
             main_img = self.add_watermark(main_img)
+            # 缓存当前完整RGB画面，用于截图功能
+            self.current_frame_rgb = main_img.copy()
             # 分段录像判断
             if self.is_rec and self.writer is not None:
                 frame_bgr = cv2.cvtColor(main_img, cv2.COLOR_RGB2BGR)
                 self.writer.write(frame_bgr)
                 if time.time() - self.rec_start_time > self.split_sec:
                     self.split_new_video()
-            # Qt渲染
+            # Qt渲染：main_img原生RGB直接渲染，无多余转换
             h, w, ch = main_img.shape
             qimg = QImage(main_img.data, w, h, ch * w, QImage.Format.Format_RGB888)
             pix = QPixmap.fromImage(qimg).scaled(self.preview_lab.size(), Qt.AspectRatioMode.KeepAspectRatio)
@@ -362,6 +431,11 @@ class MainWin(QMainWindow):
         w, h = self.cfg["video_width"], self.cfg["video_height"]
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         self.writer = cv2.VideoWriter(self.current_video_path, fourcc, 30, (w, h))
+        # 关键校验：判断录像文件是否成功打开
+        if self.writer.isOpened():
+            logger.info(f"【录像创建成功】文件路径：{self.current_video_path}")
+        else:
+            logger.error(f"【录像创建失败】无法写入路径：{self.current_video_path}")
         self.rec_start_time = time.time()
 
     def rec_toggle(self):
@@ -392,15 +466,18 @@ class MainWin(QMainWindow):
         except Exception as e:
             logger.error(f"锁定视频失败:{str(e)}")
 
+    # ========== 修复截图逻辑：使用缓存的完整预览帧，画面和预览完全一致 ==========
     def save_pic(self):
-        # 保存原始高清帧，不压缩预览图
+        if self.current_frame_rgb is None:
+            logger.warning("无可用画面，无法截图")
+            return
         dt = datetime.now().strftime("%Y%m%d_%H%M%S")
         default_jpg = os.path.join(self.save_root, f"shot_{dt}.jpg")
         save_path, _ = QFileDialog.getSaveFileName(self, "保存高清截图", default_jpg, "*.jpg")
         if save_path:
-            # 读取当前最新帧保存
-            arr0 = self.cam0.capture_array()
-            cv2.imwrite(save_path, cv2.cvtColor(arr0, cv2.COLOR_RGB2BGR))
+            # 缓存RGB转BGR保存，和预览画面色彩100%匹配
+            save_bgr = cv2.cvtColor(self.current_frame_rgb, cv2.COLOR_RGB2BGR)
+            cv2.imwrite(save_path, save_bgr)
             logger.info(f"截图保存:{save_path}")
 
     def open_album(self):

@@ -1,3 +1,5 @@
+#更改了水印颜色，输出log文件权限。现在无法存储视频。
+
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QLabel, QHBoxLayout, QWidget, QToolBar, QFileDialog,
                                QMenu, QDialog, QVBoxLayout, QSpinBox, QCheckBox, QPushButton, QLabel as QLab)
 from PyQt6.QtGui import QAction, QFont, QColor
@@ -13,8 +15,6 @@ import signal
 import RPi.GPIO as GPIO
 
 # ====================== 全局配置常量 ======================
-# CONFIG_PATH = "/opt/mineral_recorder/config.json"
-#LOG_PATH = "/opt/mineral_recorder/log/record.log"
 CONFIG_PATH = "/home/kongbin/test/config.json"
 LOG_PATH = "/home/kongbin/test/log/record.log"
 # GPIO引脚定义
@@ -30,14 +30,14 @@ DEFAULT_CFG = {
     "device_id": "MA-001",
     "video_width": 1280,
     "video_height": 720,
-    "split_minute": 5,
+    "split_minute": 1,
     "enable_watermark": True,
     "enable_audio": True,
     "cycle_storage_gb": 30,
     "warn_space_gb": 5,
     "cam_flip": True
 }
-# 初始化日志
+# 自动创建日志目录，解决权限报错
 os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
 logging.basicConfig(filename=LOG_PATH, level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("mineral_rec")
@@ -190,6 +190,8 @@ class MainWin(QMainWindow):
         self.rec_start_time = None
         self.split_sec = self.cfg["split_minute"] * 60
         self.current_video_path = ""
+        # 画面缓存（用于截图，保证截图和预览画面完全一致）
+        self.current_frame_rgb = None
         # 画面定时器 33ms
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_frame)
@@ -297,15 +299,21 @@ class MainWin(QMainWindow):
         else:
             self.act_mode.setText("模式：后退(后主+前画中画)")
 
-    def add_watermark(self, frame):
+    # ========== 修复水印色彩失真核心函数 ==========
+    def add_watermark(self, frame_rgb):
         if not self.cfg["enable_watermark"]:
-            return frame
+            return frame_rgb
         dt_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         dev_id = self.cfg["device_id"]
         mode_str = "前进" if self.car_run_mode == 0 else "后退"
-        text = f"{dt_str} 设备:{dev_id} {mode_str}"
-        cv2.putText(frame, text, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-        return frame
+        # text = f"{dt_str} 设备:{dev_id} {mode_str}"
+        text = f"{dt_str}"
+        # RGB转BGR后绘图，避免通道颠倒失真
+        frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+        cv2.putText(frame_bgr, text, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+        # 绘图完成转回原生RGB还给画面流程
+        frame_fixed = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        return frame_fixed
 
     def update_frame(self):
         try:
@@ -324,18 +332,20 @@ class MainWin(QMainWindow):
             else:
                 main_img = arr1.copy()
                 small_img = cv2.resize(arr0, (small_w, small_h))
-            # 画中画白色边框
+            # 画中画白色边框（缩放图像不影响主画面通道）
             cv2.rectangle(small_img, (0, 0), (small_w-1, small_h-1), (255,255,255), 3)
             main_img[0:small_h, W-small_w:W, :] = small_img
-            # 水印
+            # 水印处理（已修复通道转换，无色彩失真）
             main_img = self.add_watermark(main_img)
+            # 缓存当前完整RGB画面，用于截图功能
+            self.current_frame_rgb = main_img.copy()
             # 分段录像判断
             if self.is_rec and self.writer is not None:
                 frame_bgr = cv2.cvtColor(main_img, cv2.COLOR_RGB2BGR)
                 self.writer.write(frame_bgr)
                 if time.time() - self.rec_start_time > self.split_sec:
                     self.split_new_video()
-            # Qt渲染
+            # Qt渲染：main_img原生RGB直接渲染，无多余转换
             h, w, ch = main_img.shape
             qimg = QImage(main_img.data, w, h, ch * w, QImage.Format.Format_RGB888)
             pix = QPixmap.fromImage(qimg).scaled(self.preview_lab.size(), Qt.AspectRatioMode.KeepAspectRatio)
@@ -392,15 +402,18 @@ class MainWin(QMainWindow):
         except Exception as e:
             logger.error(f"锁定视频失败:{str(e)}")
 
+    # ========== 修复截图逻辑：使用缓存的完整预览帧，画面和预览完全一致 ==========
     def save_pic(self):
-        # 保存原始高清帧，不压缩预览图
+        if self.current_frame_rgb is None:
+            logger.warning("无可用画面，无法截图")
+            return
         dt = datetime.now().strftime("%Y%m%d_%H%M%S")
         default_jpg = os.path.join(self.save_root, f"shot_{dt}.jpg")
         save_path, _ = QFileDialog.getSaveFileName(self, "保存高清截图", default_jpg, "*.jpg")
         if save_path:
-            # 读取当前最新帧保存
-            arr0 = self.cam0.capture_array()
-            cv2.imwrite(save_path, cv2.cvtColor(arr0, cv2.COLOR_RGB2BGR))
+            # 缓存RGB转BGR保存，和预览画面色彩100%匹配
+            save_bgr = cv2.cvtColor(self.current_frame_rgb, cv2.COLOR_RGB2BGR)
+            cv2.imwrite(save_path, save_bgr)
             logger.info(f"截图保存:{save_path}")
 
     def open_album(self):

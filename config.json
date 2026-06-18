@@ -1,0 +1,11 @@
+{
+  "device_id": "MA-001",
+  "video_width": 1280,
+  "video_height": 720,
+  "split_minute": 1,
+  "enable_watermark": true,
+  "enable_audio": true,
+  "cycle_storage_gb": 6,
+  "warn_space_gb": 25,
+  "cam_flip": true
+}
