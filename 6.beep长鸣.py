@@ -47,26 +47,28 @@ class GpioHandler:
         self.win = win
         self.long_press_timer = {}
         GPIO.setmode(GPIO.BCM)
-        # 按键上拉输入
+        # 输入按键
         GPIO.setup(KEY_SNAP, GPIO.IN, pull_up_down=GPIO.PUD_UP)
         GPIO.setup(KEY_MODE, GPIO.IN, pull_up_down=GPIO.PUD_UP)
         GPIO.setup(SHAKE_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-        # 蜂鸣器改为低电平触发：默认高电平（不响）
-        GPIO.setup(BUZZER_PIN, GPIO.OUT, initial=GPIO.HIGH)
-        # 注册下降沿中断
+        # 低电平触发：默认高电平 关闭蜂鸣
+        GPIO.setup(BUZZER_PIN, GPIO.OUT, initial=GPIO.LOW)
+
         GPIO.add_event_detect(KEY_SNAP, GPIO.FALLING, callback=self.key_snap_cb, bouncetime=200)
         GPIO.add_event_detect(KEY_MODE, GPIO.FALLING, callback=self.key_mode_cb, bouncetime=200)
         GPIO.add_event_detect(SHAKE_PIN, GPIO.FALLING, callback=self.shake_cb, bouncetime=300)
 
+    # 安全蜂鸣，开子线程sleep，不阻塞中断回调
     def beep(self, sec):
-        # 低电平触发蜂鸣器响
-        GPIO.output(BUZZER_PIN, GPIO.LOW)
-        time.sleep(sec)
-        # 恢复高电平停止响铃
-        GPIO.output(BUZZER_PIN, GPIO.HIGH)
+        import threading
+        def beep_task():
+            GPIO.output(BUZZER_PIN, GPIO.HIGH)
+            time.sleep(sec)
+            GPIO.output(BUZZER_PIN, GPIO.LOW)
+        t = threading.Thread(target=beep_task, daemon=True)
+        t.start()
 
     def key_snap_cb(self, ch):
-        # 长按2s判定紧急锁定
         t_start = time.time()
         while GPIO.input(ch) == 0:
             if time.time() - t_start > 2:
@@ -89,8 +91,8 @@ class GpioHandler:
         logger.warning("震动传感器触发，锁定当前录像片段")
 
     def clean(self):
-        # 退出时恢复高电平，确保蜂鸣器关闭
-        GPIO.output(BUZZER_PIN, GPIO.HIGH)
+        # 退出强制关闭蜂鸣
+        GPIO.output(BUZZER_PIN, GPIO.LOW)
         GPIO.cleanup()
 # class GpioHandler:
 #     def __init__(self, win):
@@ -567,7 +569,7 @@ class MainWin(QMainWindow):
         # 关闭录像
         if self.writer:
             self.writer.release()
-        # 清理GPIO
+        # 清理GPIO，强制关闭蜂鸣
         self.gpio.clean()
         logger.info("程序正常退出，资源全部释放")
         event.accept()
@@ -586,3 +588,6 @@ if __name__ == "__main__":
         sys.exit(app.exec())
     except Exception as e:
         logger.critical(f"程序全局崩溃:{str(e)}")
+        # 崩溃强制拉高蜂鸣器
+        GPIO.output(BUZZER_PIN, GPIO.HIGH)
+        GPIO.cleanup()

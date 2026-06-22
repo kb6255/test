@@ -1,51 +1,36 @@
-import sys
-import cv2
-from PyQt6.QtWidgets import QApplication,QMainWindow,QWidget,QHBoxLayout,QLabel
-from PyQt6.QtCore import QTimer
-from PyQt6.QtGui import QImage,QPixmap
-from picamera2 import Picamera2
+import RPi.GPIO as GPIO
+import time
 
-class Win(QMainWindow):
-    def __init__(self):
-        super().__init__()
-        self.setWindowTitle("车载本地监控")
-        self.resize(1280,720)
+BUZZER_PIN = 0
+GPIO.setmode(GPIO.BCM)
 
-        # 摄像头0初始化，用预览配置（低延迟适配Qt实时预览）
-        self.p2_0 = Picamera2(0)
-        # preview预览配置，只负责低延迟出图，transform对capture_array无效因此不写
-        preview_conf = self.p2_0.create_preview_configuration(main={"size":(640,480)})
-        self.p2_0.configure(preview_conf)
-        self.p2_0.start()
+# 先配置输出并立刻拉高，消除浮空
+GPIO.setup(BUZZER_PIN, GPIO.OUT)
+GPIO.output(BUZZER_PIN, GPIO.HIGH)
+time.sleep(0.5)
+print("=== 初始高电平，蜂鸣器应停止 ===")
+time.sleep(2)
 
-        # UI布局
-        center = QWidget()
-        self.setCentralWidget(center)
-        lay = QHBoxLayout(center)
-        self.lab0 = QLabel()
-        lay.addWidget(self.lab0)
+# 循环4组长短鸣叫测试
+for i in range(4):
+    print(f"\n===== 第{i+1}组测试 =====")
+    # 短鸣0.1s
+    GPIO.output(BUZZER_PIN, GPIO.LOW)
+    print("输出LOW，蜂鸣器响 0.1s")
+    time.sleep(0.1)
+    GPIO.output(BUZZER_PIN, GPIO.HIGH)
+    print("输出HIGH，停止鸣叫，停留1秒")
+    time.sleep(1)
 
-        # 30fps定时器刷新画面
-        self.tim = QTimer()
-        self.tim.timeout.connect(self.update_frame)
-        self.tim.start(33)
+    # 长鸣0.3s
+    GPIO.output(BUZZER_PIN, GPIO.LOW)
+    print("输出LOW，蜂鸣器长响 0.3s")
+    time.sleep(0.3)
+    GPIO.output(BUZZER_PIN, GPIO.HIGH)
+    print("输出HIGH，停止鸣叫，停留1秒")
+    time.sleep(1)
 
-    def update_frame(self):
-        # 获取原始画面
-        arr0 = self.p2_0.capture_array()
-        # ==========关键：180度旋转转正画面（上下+左右翻转，适配倒装摄像头）==========
-        #arr0 = cv2.flip(arr0, -1)
-        self.set_img(arr0,self.lab0)
-
-    def set_img(self,arr,lab):
-        # BGR转RGB给Qt渲染
-        rgb = cv2.cvtColor(arr,cv2.COLOR_BGR2RGB)
-        h,w,ch = rgb.shape
-        qimg = QImage(rgb.data,w,h,ch*w,QImage.Format.Format_RGB888)
-        lab.setPixmap(QPixmap.fromImage(qimg))
-
-if __name__=="__main__":
-    app = QApplication(sys.argv)
-    win = Win()
-    win.show()
-    sys.exit(app.exec())
+print("\n全部测试完成，保持高电平关闭蜂鸣器")
+GPIO.output(BUZZER_PIN, GPIO.HIGH)
+time.sleep(3)
+GPIO.cleanup()

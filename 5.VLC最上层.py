@@ -12,6 +12,10 @@ import cv2
 from datetime import datetime
 import signal
 import RPi.GPIO as GPIO
+# import vlc
+
+os.environ["QT_QPA_PLATFORM"] = "xcb"
+os.environ["QT_X11_NO_MITSHM"] = "1"
 
 # ====================== 全局配置常量 ======================
 CONFIG_PATH = "/home/kongbin/test/config.json"
@@ -47,26 +51,28 @@ class GpioHandler:
         self.win = win
         self.long_press_timer = {}
         GPIO.setmode(GPIO.BCM)
-        # 按键上拉输入
+        # 输入按键
         GPIO.setup(KEY_SNAP, GPIO.IN, pull_up_down=GPIO.PUD_UP)
         GPIO.setup(KEY_MODE, GPIO.IN, pull_up_down=GPIO.PUD_UP)
         GPIO.setup(SHAKE_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-        # 蜂鸣器改为低电平触发：默认高电平（不响）
+        # 低电平触发：默认高电平 关闭蜂鸣
         GPIO.setup(BUZZER_PIN, GPIO.OUT, initial=GPIO.HIGH)
-        # 注册下降沿中断
+
         GPIO.add_event_detect(KEY_SNAP, GPIO.FALLING, callback=self.key_snap_cb, bouncetime=200)
         GPIO.add_event_detect(KEY_MODE, GPIO.FALLING, callback=self.key_mode_cb, bouncetime=200)
         GPIO.add_event_detect(SHAKE_PIN, GPIO.FALLING, callback=self.shake_cb, bouncetime=300)
 
+    # 安全蜂鸣，开子线程sleep，不阻塞中断回调
     def beep(self, sec):
-        # 低电平触发蜂鸣器响
-        GPIO.output(BUZZER_PIN, GPIO.LOW)
-        time.sleep(sec)
-        # 恢复高电平停止响铃
-        GPIO.output(BUZZER_PIN, GPIO.HIGH)
+        import threading
+        def beep_task():
+            GPIO.output(BUZZER_PIN, GPIO.LOW)
+            time.sleep(sec)
+            GPIO.output(BUZZER_PIN, GPIO.HIGH)
+        t = threading.Thread(target=beep_task, daemon=True)
+        t.start()
 
     def key_snap_cb(self, ch):
-        # 长按2s判定紧急锁定
         t_start = time.time()
         while GPIO.input(ch) == 0:
             if time.time() - t_start > 2:
@@ -89,55 +95,9 @@ class GpioHandler:
         logger.warning("震动传感器触发，锁定当前录像片段")
 
     def clean(self):
-        # 退出时恢复高电平，确保蜂鸣器关闭
+        # 退出强制关闭蜂鸣
         GPIO.output(BUZZER_PIN, GPIO.HIGH)
         GPIO.cleanup()
-# class GpioHandler:
-#     def __init__(self, win):
-#         self.win = win
-#         self.long_press_timer = {}
-#         GPIO.setmode(GPIO.BCM)
-#         # 按键上拉输入
-#         GPIO.setup(KEY_SNAP, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-#         GPIO.setup(KEY_MODE, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-#         GPIO.setup(SHAKE_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-#         GPIO.setup(BUZZER_PIN, GPIO.OUT, initial=GPIO.LOW)
-#         # 注册下降沿中断
-#         GPIO.add_event_detect(KEY_SNAP, GPIO.FALLING, callback=self.key_snap_cb, bouncetime=200)
-#         GPIO.add_event_detect(KEY_MODE, GPIO.FALLING, callback=self.key_mode_cb, bouncetime=200)
-#         GPIO.add_event_detect(SHAKE_PIN, GPIO.FALLING, callback=self.shake_cb, bouncetime=300)
-
-#     def beep(self, sec):
-#         GPIO.output(BUZZER_PIN, GPIO.HIGH)
-#         time.sleep(sec)
-#         GPIO.output(BUZZER_PIN, GPIO.LOW)
-
-#     def key_snap_cb(self, ch):
-#         # 长按2s判定紧急锁定
-#         t_start = time.time()
-#         while GPIO.input(ch) == 0:
-#             if time.time() - t_start > 2:
-#                 self.win.lock_current_video()
-#                 self.beep(BEEP_LONG)
-#                 logger.info("长按拍照键：锁定当前视频")
-#                 return
-#         self.win.save_pic()
-#         self.beep(BEEP_SHORT)
-#         logger.info("短按拍照键：截图保存")
-
-#     def key_mode_cb(self, ch):
-#         self.win.switch_car_mode()
-#         self.beep(BEEP_SHORT)
-#         logger.info("模式切换按键触发")
-
-#     def shake_cb(self, ch):
-#         self.win.lock_current_video()
-#         self.beep(BEEP_LONG)
-#         logger.warning("震动传感器触发，锁定当前录像片段")
-
-#     def clean(self):
-#         GPIO.output(BUZZER_PIN, GPIO.LOW)
-#         GPIO.cleanup()
 
 # ====================== 设置弹窗 ======================
 class SettingDialog(QDialog):
@@ -269,60 +229,45 @@ class MainWin(QMainWindow):
             self.load_config()
             self.split_sec = self.cfg["split_minute"] * 60
             logger.info("参数配置已更新")
+
     def get_usb_dir(self):
         try:
-            cmd = "lsblk -o MOUNTPOINT,FSTYPE | grep /media/"
-            out = subprocess.check_output(cmd, shell=True, encoding="utf-8")
-            lines = out.strip().splitlines()
+            # 改用subprocess.run，grep无结果不会抛异常
+            cmd = ["lsblk", "-o", "MOUNTPOINT,FSTYPE", "--noheadings"]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
+            lines = result.stdout.strip().splitlines()
+            usb_mount = None
             for line in lines:
-                mp, fs = line.split()
-                if fs in ("vfat", "exfat", "ntfs", "fat32"):
-                    return os.path.join(mp, "record")
-            # 无U盘本地存储
-            logger.warning("未检测到U盘，切换本地存储")
-            return os.path.join(os.path.expanduser("~"), "record_backup")
+                parts = line.split()
+                if len(parts) < 2:
+                    continue
+                mp, fs = parts[0], parts[1]
+                # 筛选移动存储格式
+                if fs in ("vfat", "exfat", "ntfs", "fat32") and mp.startswith("/media/"):
+                    # 写入权限测试，无法写入直接跳过该U盘
+                    test_file = os.path.join(mp, ".write_test.tmp")
+                    try:
+                        with open(test_file, "w") as f:
+                            f.write("test")
+                        os.remove(test_file)
+                        usb_mount = mp
+                        break
+                    except Exception as e:
+                        logger.warning(f"U盘挂载点 {mp} 无写入权限，跳过：{str(e)}")
+            if usb_mount:
+                save_path = os.path.join(usb_mount, "record")
+                lock_path = os.path.join(save_path, "lock_video")
+                os.makedirs(save_path, exist_ok=True)
+                os.makedirs(lock_path, exist_ok=True)
+                logger.info(f"【存储确认】识别可写U盘，实际存储目录：{save_path}")
+                return save_path
+            else:
+                raise Exception("未找到拥有写入权限的U盘")
         except Exception as e:
-            logger.error(f"U盘检测异常:{str(e)}")
-            return os.path.join(os.path.expanduser("~"), "record_backup")
-    
-    # def get_usb_dir(self):
-    #     try:
-    #         # 改用subprocess.run，grep无结果不会抛异常
-    #         cmd = ["lsblk", "-o", "MOUNTPOINT,FSTYPE", "--noheadings"]
-    #         result = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
-    #         lines = result.stdout.strip().splitlines()
-    #         usb_mount = None
-    #         for line in lines:
-    #             parts = line.split()
-    #             if len(parts) < 2:
-    #                 continue
-    #             mp, fs = parts[0], parts[1]
-    #             # 筛选移动存储格式
-    #             if fs in ("vfat", "exfat", "ntfs", "fat32") and mp.startswith("/media/"):
-    #                 # 写入权限测试，无法写入直接跳过该U盘
-    #                 test_file = os.path.join(mp, ".write_test.tmp")
-    #                 try:
-    #                     with open(test_file, "w") as f:
-    #                         f.write("test")
-    #                     os.remove(test_file)
-    #                     usb_mount = mp
-    #                     break
-    #                 except Exception as e:
-    #                     logger.warning(f"U盘挂载点 {mp} 无写入权限，跳过：{str(e)}")
-    #         if usb_mount:
-    #             save_path = os.path.join(usb_mount, "record")
-    #             lock_path = os.path.join(save_path, "lock_video")
-    #             os.makedirs(save_path, exist_ok=True)
-    #             os.makedirs(lock_path, exist_ok=True)
-    #             logger.info(f"【存储确认】识别可写U盘，实际存储目录：{save_path}")
-    #             return save_path
-    #         else:
-    #             raise Exception("未找到拥有写入权限的U盘")
-    #     except Exception as e:
-    #         local_path = os.path.join(os.path.expanduser("~"), "record_backup")
-    #         os.makedirs(local_path, exist_ok=True)
-    #         logger.warning(f"【存储切换】U盘不可用({str(e)})，切换本地存储：{local_path}")
-    #         return local_path
+            local_path = os.path.join(os.path.expanduser("~"), "record_backup")
+            os.makedirs(local_path, exist_ok=True)
+            logger.warning(f"【存储切换】U盘不可用({str(e)})，切换本地存储：{local_path}")
+            return local_path
 
     def check_disk_space(self):
         # 每次磁盘检测自动重新识别U盘，支持中途插拔
