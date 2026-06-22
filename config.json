@@ -5,7 +5,7 @@
   "split_minute": 1,
   "enable_watermark": true,
   "enable_audio": true,
-  "cycle_storage_gb": 6,
+  "cycle_storage_gb": 4,
   "warn_space_gb": 25,
   "cam_flip": true
 }

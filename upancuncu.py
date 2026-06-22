@@ -19,7 +19,7 @@ LOG_PATH = "/home/kongbin/test/log/record.log"
 # GPIO引脚定义
 KEY_SNAP = 13       # 拍照短按，长按锁定视频
 KEY_MODE = 19       # 画面模式切换
-BUZZER_PIN = 6      # 蜂鸣器
+BUZZER_PIN = 5      # 蜂鸣器
 SHAKE_PIN = 26      # 震动传感器
 # 蜂鸣器时长
 BEEP_SHORT = 0.1
@@ -335,17 +335,20 @@ class MainWin(QMainWindow):
     def init_camera(self):
         try:
             w, h = self.cfg["video_width"], self.cfg["video_height"]
+            # 2. 判断是否开启画面垂直翻转，生成翻转参数
             transform = Transform(vflip=True) if self.cfg["cam_flip"] else Transform()
             self.cam0 = Picamera2(0)
             cfg0 = self.cam0.create_video_configuration(main={"size": (w, h), "format": "RGB888"}, transform=transform)
             self.cam0.configure(cfg0)
             self.cam0.start()
+            # ========== 双摄模式开启，则初始化第二路 cam1 (CSI1) ==========
             if self.use_dual_cam:
                 self.cam1 = Picamera2(1)
                 cfg1 = self.cam1.create_video_configuration(main={"size": (w, h), "format": "RGB888"}, transform=transform)
                 self.cam1.configure(cfg1)
                 self.cam1.start()
             logger.info("双摄像头初始化成功")
+        # 捕获摄像头所有异常：排线松、摄像头未识别、占用、权限不足等
         except Exception as e:
             logger.error(f"摄像头初始化失败:{str(e)}")
             self.preview_lab.setText(f"摄像头异常:{str(e)}，3s后重试")
@@ -400,14 +403,21 @@ class MainWin(QMainWindow):
             self.current_frame_rgb = main_img.copy()
             # 分段录像判断
             if self.is_rec and self.writer is not None:
-                frame_bgr = cv2.cvtColor(main_img, cv2.COLOR_RGB2BGR)
-                self.writer.write(frame_bgr)
+                # 去掉RGB2BGR转换，直接写入原图
+                self.writer.write(main_img)
                 if time.time() - self.rec_start_time > self.split_sec:
                     self.split_new_video()
             # Qt渲染：main_img原生RGB直接渲染，无多余转换
-            h, w, ch = main_img.shape
-            qimg = QImage(main_img.data, w, h, ch * w, QImage.Format.Format_RGB888)
-            pix = QPixmap.fromImage(qimg).scaled(self.preview_lab.size(), Qt.AspectRatioMode.KeepAspectRatio)
+            # 新增：BGR → RGB，专门给界面预览
+            preview_fix = cv2.cvtColor(main_img, cv2.COLOR_BGR2RGB)
+            h, w, ch = preview_fix.shape
+            qimg = QImage(preview_fix.data, w, h, ch * w, QImage.Format.Format_RGB888)
+            # pix = QPixmap.fromImage(qimg).scaled(self.preview_lab.size(), Qt.AspectRatioMode.KeepAspectRatio)
+            # pix = QPixmap.fromImage(qimg).scaled(self.preview_lab.size(), Qt.AspectRatioMode.IgnoreAspectRatio)# 裁剪拉伸
+            pix = QPixmap.fromImage(qimg).scaled(
+                self.preview_lab.size(),
+                Qt.AspectRatioMode.KeepAspectRatioByExpanding
+            )
             self.preview_lab.setPixmap(pix)
             # 状态栏文字
             mod_str = "【前进：前主+后画中画】" if self.car_run_mode == 0 else "【后退：后主+前画中画】"
