@@ -4856,3 +4856,100 @@
 2026-06-22 17:23:55,275 - INFO - 双摄像头初始化成功
 2026-06-22 17:24:16,228 - INFO - 【录像创建成功】文件路径：/media/kongbin/123/record/20260622_172415.mp4
 2026-06-22 17:24:16,229 - INFO - 开始录像，文件:/media/kongbin/123/record/20260622_172415.mp4
+2026-07-06 14:16:27,638 - INFO - Initialization successful.
+2026-07-06 14:16:27,638 - INFO - Camera now open.
+2026-07-06 14:16:27,640 - INFO - Camera configuration has been adjusted!
+2026-07-06 14:16:27,640 - INFO - Configuration successful!
+2026-07-06 14:16:27,654 - INFO - Camera started
+2026-07-06 14:16:27,687 - INFO - Initialization successful.
+2026-07-06 14:16:27,687 - INFO - Camera now open.
+2026-07-06 14:16:27,689 - INFO - Camera configuration has been adjusted!
+2026-07-06 14:16:27,690 - INFO - Configuration successful!
+2026-07-06 14:16:27,707 - INFO - Camera started
+2026-07-06 14:16:27,707 - INFO - 双摄像头初始化成功
+2026-07-06 14:16:27,713 - ERROR - U盘检测异常:Command 'lsblk -o MOUNTPOINT,FSTYPE | grep /media/' returned non-zero exit status 1.
+2026-07-06 14:16:52,725 - INFO - 模式切换按键触发
+2026-07-06 14:16:52,975 - INFO - 模式切换按键触发
+2026-07-06 14:16:56,312 - INFO - 模式切换按键触发
+2026-07-06 14:16:57,810 - ERROR - U盘检测异常:Command 'lsblk -o MOUNTPOINT,FSTYPE | grep /media/' returned non-zero exit status 1.
+2026-07-06 14:16:57,811 - INFO - 【容量校验】全部录像总大小:0.25GB，上限阈值:4GB
+2026-07-06 14:16:58,219 - INFO - 模式切换按键触发
+2026-07-06 14:21:38,611 - INFO - Initialization successful.
+2026-07-06 14:21:38,611 - INFO - Camera now open.
+2026-07-06 14:21:38,613 - INFO - Camera configuration has been adjusted!
+2026-07-06 14:21:38,614 - INFO - Configuration successful!
+2026-07-06 14:21:38,626 - INFO - Camera started
+2026-07-06 14:21:38,659 - INFO - Initialization successful.
+2026-07-06 14:21:38,659 - INFO - Camera now open.
+2026-07-06 14:21:38,661 - INFO - Camera configuration has been adjusted!
+2026-07-06 14:21:38,662 - INFO - Configuration successful!
+2026-07-06 14:21:38,677 - INFO - Camera started
+2026-07-06 14:21:38,677 - INFO - 双摄像头初始化成功
+2026-07-06 14:21:38,682 - WARNING - 【存储切换】U盘不可用(未找到拥有写入权限的U盘)，切换本地存储：/home/kongbin/record_backup
+2026-07-06 14:21:44,058 - WARNING - 震动传感器触发，标记当前视频待锁定
+2026-07-06 14:21:46,145 - INFO - 模式切换按键触发
+2026-07-06 14:21:46,487 - INFO - 模式切换按键触发
+2026-07-06 14:21:47,765 - INFO - 模式切换按键触发
+2026-07-06 14:21:48,521 - INFO - 模式切换按键触发
+2026-07-06 14:21:49,243 - INFO - 模式切换按键触发
+2026-07-06 14:21:49,687 - INFO - 模式切换按键触发
+2026-07-06 14:21:51,478 - INFO - 截图保存:/home/kongbin/record_backup/photos/shot_20260706_142151.jpg
+2026-07-06 14:21:51,478 - INFO - 短按拍照键：截图保存
+2026-07-06 14:21:53,484 - INFO - 截图保存:/home/kongbin/record_backup/photos/shot_20260706_142153.jpg
+2026-07-06 14:21:53,485 - INFO - 短按拍照键：截图保存
+2026-07-06 14:21:53,688 - INFO - 截图保存:/home/kongbin/record_backup/photos/shot_20260706_142153.jpg
+2026-07-06 14:21:53,689 - INFO - 短按拍照键：截图保存
+2026-07-06 14:21:54,951 - INFO - 模式切换按键触发
+2026-07-06 14:21:55,233 - INFO - 模式切换按键触发
+2026-07-06 14:21:56,042 - INFO - 模式切换按键触发
+2026-07-06 14:21:56,950 - INFO - 模式切换按键触发
+2026-07-06 14:21:57,932 - INFO - 模式切换按键触发
+2026-07-06 14:21:59,090 - INFO - 模式切换按键触发
+2026-07-06 14:22:01,136 - INFO - 截图保存:/home/kongbin/record_backup/photos/shot_20260706_142201.jpg
+2026-07-06 14:22:01,136 - INFO - 短按拍照键：截图保存
+2026-07-06 14:22:01,336 - INFO - 截图保存:/home/kongbin/record_backup/photos/shot_20260706_142201.jpg
+2026-07-06 14:22:01,337 - INFO - 短按拍照键：截图保存
+2026-07-06 14:22:02,182 - INFO - 模式切换按键触发
+2026-07-06 14:22:02,503 - INFO - 模式切换按键触发
+2026-07-06 14:22:08,796 - WARNING - 【存储切换】U盘不可用(未找到拥有写入权限的U盘)，切换本地存储：/home/kongbin/record_backup
+2026-07-06 14:22:08,797 - INFO - 【容量校验】全部录像总大小:0.25GB，上限阈值:4GB
+2026-07-06 14:22:38,797 - WARNING - 【存储切换】U盘不可用(未找到拥有写入权限的U盘)，切换本地存储：/home/kongbin/record_backup
+2026-07-06 14:22:38,799 - INFO - 【容量校验】全部录像总大小:0.25GB，上限阈值:4GB
+2026-07-06 14:23:03,685 - INFO - 收到按键：16777216
+2026-07-06 14:23:04,982 - INFO - 收到按键：16777216
+2026-07-06 14:23:08,792 - WARNING - 【存储切换】U盘不可用(未找到拥有写入权限的U盘)，切换本地存储：/home/kongbin/record_backup
+2026-07-06 14:23:08,793 - INFO - 【容量校验】全部录像总大小:0.25GB，上限阈值:4GB
+2026-07-06 14:23:11,978 - INFO - 收到按键：16777251
+2026-07-06 14:23:12,549 - INFO - Camera stopped
+2026-07-06 14:23:12,553 - INFO - Camera stopped
+2026-07-06 14:23:12,655 - INFO - 程序正常退出，资源全部释放
+2026-07-06 14:24:19,889 - INFO - Initialization successful.
+2026-07-06 14:24:19,889 - INFO - Camera now open.
+2026-07-06 14:24:19,891 - INFO - Camera configuration has been adjusted!
+2026-07-06 14:24:19,891 - INFO - Configuration successful!
+2026-07-06 14:24:19,905 - INFO - Camera started
+2026-07-06 14:24:19,939 - INFO - Initialization successful.
+2026-07-06 14:24:19,939 - INFO - Camera now open.
+2026-07-06 14:24:19,941 - INFO - Camera configuration has been adjusted!
+2026-07-06 14:24:19,942 - INFO - Configuration successful!
+2026-07-06 14:24:19,958 - INFO - Camera started
+2026-07-06 14:24:19,958 - INFO - 双摄像头初始化成功
+2026-07-06 14:24:19,963 - WARNING - 【存储切换】U盘不可用(未找到拥有写入权限的U盘)，切换本地存储：/home/kongbin/record_backup
+2026-07-06 14:24:34,799 - INFO - 截图保存:/home/kongbin/record_backup/photos/shot_20260706_142434.jpg
+2026-07-06 14:24:34,800 - INFO - 短按拍照键：截图保存
+2026-07-06 14:24:34,984 - INFO - 截图保存:/home/kongbin/record_backup/photos/shot_20260706_142434.jpg
+2026-07-06 14:24:34,984 - INFO - 短按拍照键：截图保存
+2026-07-06 14:24:38,495 - INFO - 收到按键：16777216
+2026-07-06 14:24:43,288 - INFO - 收到按键：16777216
+2026-07-06 14:24:44,187 - INFO - 收到按键：16777216
+2026-07-06 14:24:44,924 - INFO - 收到按键：16777216
+2026-07-06 14:24:49,122 - INFO - 收到按键：16777216
+2026-07-06 14:24:49,794 - WARNING - 【存储切换】U盘不可用(未找到拥有写入权限的U盘)，切换本地存储：/home/kongbin/record_backup
+2026-07-06 14:24:49,795 - INFO - 【容量校验】全部录像总大小:0.25GB，上限阈值:4GB
+2026-07-06 14:24:51,687 - INFO - 收到按键：16777216
+2026-07-06 14:24:52,488 - INFO - 收到按键：16777216
+2026-07-06 14:25:01,421 - INFO - 收到按键：16777216
+2026-07-06 14:25:19,790 - WARNING - 【存储切换】U盘不可用(未找到拥有写入权限的U盘)，切换本地存储：/home/kongbin/record_backup
+2026-07-06 14:25:19,791 - INFO - 【容量校验】全部录像总大小:0.25GB，上限阈值:4GB
+2026-07-06 14:25:49,786 - WARNING - 【存储切换】U盘不可用(未找到拥有写入权限的U盘)，切换本地存储：/home/kongbin/record_backup
+2026-07-06 14:25:49,787 - INFO - 【容量校验】全部录像总大小:0.25GB，上限阈值:4GB
